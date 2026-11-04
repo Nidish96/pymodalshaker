@@ -1,0 +1,28 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+.venv/
+venv/
+# Measurement results (keep data out of the repository)
+ModalTests/
+*_reprocessed_*/
+*.tdms
+*.tdms_index
+*.uff
+# LaTeX / org export by-products
+docs/*.tex
+docs/*.log
+docs/*.aux
+docs/*.out
+docs/*.toc
+docs/_minted*
+# Editors / OS
+*~
+\#*\#
+.#*
+.DS_Store
+.idea/
+.vscode/

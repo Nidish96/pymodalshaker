@@ -1,0 +1,688 @@
+#+TITLE: pymodalshaker --- shaker modal testing with NI CompactDAQ (PySide6 + NI-DAQmx)
+#+STARTUP: overview
+#+OPTIONS: toc:2 num:nil ^:{}
+
+*Disclaimer*: This was vibe coded using Claude Opus 5.5 over Nov 2-Nov 4 2026. It comes with no
+guarantees of correctness.
+- *How it was made*: the code, the README and the user manual (=docs/=) were written by the AI from
+  the author's specifications, then revised through many rounds of the author's testing and
+  feedback.
+- *How it was tested*: with the built-in simulator (a software shaker driving a three-mode
+  structure) and automated GUI tests, and in extensive use by the author over those days on real
+  hardware: a cDAQ-9174 with NI 9234 inputs and an NI 9260 output, driving a shaker attached to a
+  beam through an impedance head. /Check with hardware/ has been verified on that hardware.
+- *Before relying on results*: check them independently, e.g. against a structure with known
+  properties, a hand calculation, or another acquisition system. Watch the drive limit and the
+  amplifier gain the first time each suite drives real hardware.
+- Version 0.1.0b1 (first beta), shown in the window title and saved in every run's =setup.json=. NI,
+  CompactDAQ, NI-DAQmx, LabVIEW and DIAdem are trademarks of National Instruments (NI); this tool is
+  not affiliated with or endorsed by NI.
+
+A desktop app for shaker-driven modal testing with a USB NI cDAQ chassis (e.g. cDAQ-9174). It uses
+continuous, synchronized analog input and analog output, and offers four excitation suites:
+- a *random suite* (periodic random, multisine, chirp, burst, custom spectra),
+- a *stepped-sine suite* with secant amplitude control (both give H1/H2/Hv FRFs, UFF 58 and TDMS),
+- a *harmonic suite*: one base frequency with a list of harmonics (amplitude and phase each),
+  fixed or controlled on a response channel by a quasi-Newton (Broyden) controller; it records
+  time data only,
+- a *phase-quadrature suite*: amplitude-dependent resonance. For every drive level the frequency
+  is iterated to phase quadrature (or to maximum |H1|, reference-free), giving backbone curves.
+
+* Install & run
+Requires Python ≥ 3.10. For hardware you also need the *NI-DAQmx driver* from ni.com (without it,
+the app runs in simulation mode).
+
+Install directly from GitHub:
+#+begin_src sh
+pip install "git+https://github.com/Nidish96/pymodalshaker.git"
+pymodalshaker                        # or: python -m pymodalshaker
+#+end_src
+
+Or from a clone, editable (changes to the source take effect without reinstalling):
+#+begin_src sh
+git clone https://github.com/Nidish96/pymodalshaker.git
+cd pymodalshaker
+python -m venv .venv && source .venv/bin/activate     # Windows: .venv\Scripts\activate
+pip install -e .
+pymodalshaker
+#+end_src
+
+The user manual is =docs/shaker_modal_test_manual.org= (with a ready-made PDF next to it); export
+it again from Emacs with =C-c C-e l p=.
+
+If no NI hardware or driver is found, the app starts in *Simulation mode* (Hardware menu). This
+mode uses a software shaker (with mild, level-dependent harmonic distortion) and a 3-mode structure, so you can try the whole workflow, including
+saved files, on any PC. Turn it off under /Hardware → Simulation mode/ once the cDAQ is connected
+(/Hardware → Refresh NI devices/, F5).
+
+* Workflow
+1. *Channel Setup*: one row per sensor. Set the physical channel, name, *node* and *direction*
+   (both are written to the UFF file), sensor type, sensitivity, units, range, IEPE current and coupling.
+   Tick *Reference* on the drive-point force sensor. Every other enabled channel becomes one FRF.
+   Sensor types: accelerometer, force, microphone and *pressure* (IEPE), strain gauge (bridge),
+   voltage, and *Custom*. /Pressure (IEPE)/ reads an IEPE pressure transducer with its sensitivity
+   in mV per kPa, Pa, bar, psi or MPa. /Custom/ is for any other voltage-output sensor (laser
+   vibrometer, displacement probe, …): choose Custom, type the sensor's name in the field that
+   appears, pick or type its unit (mm, µm, m/s, …) and enter the sensitivity in mV per that unit;
+   set IEPE if it needs excitation. Pressure and custom channels are measured as voltage and scaled
+   by the sensitivity; the custom name and unit are saved in the TDMS and UFF files (UFF type
+   "pressure" for pressure, "general" for custom).
+   Strain gauges use the bridge columns (bridge type, gage factor, excitation, nominal resistance,
+   Poisson's ratio). The /Bulk edit/ menu numbers nodes, copies sensor settings to selected rows,
+   and adds every channel of a module.
+2. *Output Setup*: the AO channel, a drive voltage limit (the run is refused if any block would
+   exceed it), the excitation type and RMS, the frequency band, sampling rate, block size,
+   *dwell blocks*, *realizations* and the *IEPE decay time*. The panel on the right shows Δf,
+   crest factor, peak against the limit, test duration and a preview of a drive block and its spectrum.
+   Drag the divider to resize the settings column; the preview plots are resizable against each other.
+3. *Measurement*: choose what to save, then press Start. You get:
+   - *Channels A and B* are chosen once, above the tabs, and used by Live data, Controller and
+     Harmonics. A is on the left axis, B on its own right axis, since units may differ; you can
+     pick sensors, the drive or the trigger;
+   - the live block of the two channels;
+   - a *recent-blocks strip* showing the last /N/ blocks of those channels (default dwell + 2,
+     adjustable up to 100) on the acquisition time axis, with dashed separators, block labels (=R3·2/4= = realization 3, dwell
+     block 2 of 4) and the converged block used for the FRF shaded green. You can watch the
+     transient die out and the response become periodic;
+   - coherence, FRF magnitude and phase (H1/H2/Hv) from 0 to fs/2, updated after every
+     realization. Dashed lines mark the band of interest;
+   - progress, and an input-backlog health indicator;
+   - *Export plots...*, which saves the live and FRF plots as PNG (2× resolution), SVG or PDF.
+4. *Data Viewer*: point it at a run folder, or at a folder of runs (pick one from the /Run/
+   list). The suite of every run is *detected automatically*, from =setup.json= or else the file
+   names. Runs are tagged =[random]= / =[stepped]= in the lists, a badge shows the suite, and the
+   stepped-only views appear only for stepped runs. It shows the run's settings and which files exist (H1/H2/Hv/Coherence UFF, converged
+   blocks, full realizations, trigger log), then offers these views:
+   - *Frequency domain*:
+     - /Show: FRF/: coherence (or η), |H| and phase of any response over the full 0...fs/2 range
+       (stepped sine: at the measured frequencies). /Source/ is either *Recomputed from TDMS*,
+       calculated from the time data with the reference and labels from the channel table, or
+       *Stored UFF files*, exactly as saved.
+     - /Show: Amplitude spectrum/: the raw amplitude of any single channel. Random runs give the
+       single-sided spectrum, RMS-averaged over the realizations' converged blocks. Stepped runs
+       give the fundamental's amplitude at each excitation frequency.
+   - *Harmonics (stepped sine only)*: the same harmonics page as on the Measurement tab (see
+     /Harmonic decomposition/), computed from the run's dwell blocks. It follows the reference
+     chosen on the channel table.
+     - The dashed band markers are the excitation band (random) or the start and stop frequencies
+       (stepped sine).
+   - *Realizations*: pick a realization from the drop-down. You see either its converged block or,
+     if saved, all of its dwell blocks, for two channels, with block separators, the converged
+     block in green, and the amplitude spectrum of a chosen block (lin/log).
+   - *Compare runs*: tick several runs (from the scanned folder, or add more with /Add runs from
+     folder…/) and overlay the same channel from each. Channels are matched by name and each run
+     uses its own reference. You can overlay an FRF (choose H1/H2/Hv; coherence or η on top,
+     magnitude, phase) or an amplitude spectrum. *Random and stepped-sine runs can be compared
+     directly*: stepped runs are drawn with markers at their measured frequencies, random runs as
+     lines. The view exports as an image.
+   - *Channels & re-processing*: a table of every channel (including the drive). Choose the
+     *reference* (any channel, e.g. an accelerometer for transmissibilities, or the drive voltage)
+     and which channels are *responses*, and edit *names, nodes and directions*. /Apply/
+     recomputes H1/H2/Hv/coherence from the converged blocks. /Save re-processed copy.../ writes a
+     new run folder =<run>_reprocessed_<time>= with the UFF files, the TDMS files carrying the new
+     labels (optionally including every realization file), an updated =setup.json= (with a
+     =reprocessing= note) and the trigger log. The original run is never modified. Runs saved
+     without the converged-block TDMS can only be relabelled, and their reference stays fixed.
+     Each plot view has its own *Export image...* button (PNG/SVG/PDF). A finished run is opened here
+     automatically. *Stop* fades the drive out smoothly and still saves the
+     realizations completed so far.
+
+/File → Save setup/ stores everything as JSON. The last setup is restored automatically on startup.
+
+* How a run works
+The AI and AO tasks run in *continuous* mode from start to finish. AO regeneration is disabled, and
+one new AO block is queued for every AI block read, so there are no gaps and no missed or repeated
+samples. If the PC falls behind, DAQmx raises an error rather than dropping data silently. AO starts
+on the AI start trigger, so AI block /k/ is the response to AO block /k/.
+
+#+begin_example
+[0 V for IEPE decay time] [fade-in] [R1 × dwell] [R2 × dwell] … [RR × dwell] [fade-out] [0 V]
+#+end_example
+
+- The *band* (f_min ... f_max) sets the lines excited by the band-limited types and the markers
+  on the plots. It never limits what is saved: FRFs are always stored from Δf to fs/2.
+- With multisine, Gaussian, chirp, burst and custom excitation every excited frequency is an exact
+  FFT bin (k·fs/N), so there is no leakage.
+- *Dwell blocks*: each random block is repeated /dwell/ times, so the response becomes periodic.
+  The *last block of each realization* is the converged block. Only that block is used for the
+  FRF average and saved to TDMS. The log reports the block-to-block change of the last two blocks
+  in %; once the response has converged, this falls to the noise level.
+- *Realizations* = number of averages. Use the Rectangular window for periodic excitation.
+- *IEPE decay time*: the drive is held at 0 V while the IEPE conditioners settle. The data is
+  displayed but discarded.
+
+** Excitation types
+All types are scaled to the requested RMS. All except burst random are periodic in the block.
+
+| Type                           | Spectrum                                                    | Phases                           | Crest factor  | Use it for                                                                                      |
+|--------------------------------+-------------------------------------------------------------+----------------------------------+---------------+-------------------------------------------------------------------------------------------------|
+| Uniform random                 | white, 0 ... fs/2                                           | random (time samples)            | ≈ 1.7         | quick broadband checks                                                                          |
+| Multisine random               | flat on every FFT line in the band                          | U(0, 2π)                         | ≈ 3–3.5       | general periodic-random FRFs                                                                    |
+| Gaussian random (band-limited) | Rayleigh-distributed line amplitudes in the band            | U(0, 2π)                         | ≈ 3.5–4       | true random statistics, nonlinearity checks                                                     |
+| Periodic chirp                 | flat in the band                                            | Schroeder (fast repeating sweep) | ≈ 1.6–2       | most force per amplifier volt, best SNR; deterministic, so averaging only reduces noise         |
+| Burst random                   | band-limited random for x % of the block, then silence      | random                           | ≈ 3–3.5 (on)  | lightly damped structures: response decays inside the block, no window needed                   |
+| Custom spectrum                | your table (f, value), as amplitude (linear) or PSD (log-log) | U(0, 2π)                         | depends       | shaped spectra: emphasise or avoid bands, follow a test specification                           |
+
+*Custom spectrum*: enter the points in the table on the Output Setup tab. You can type them, paste
+two columns from a spreadsheet (a header line is fine), import or export a CSV, or load a preset.
+The plot under the table updates on every edit, with the table points in orange and the resulting
+FFT-line amplitudes in blue. Values are either line amplitudes (linear interpolation) or a PSD
+shape (log-log interpolation, i.e. straight dB/octave slopes, amplitude = √PSD). The spectrum is
+zero outside the table's frequency range. Only the shape matters; the level comes from the RMS.
+
+** FFT windows
+Rectangular, Hann, Hamming, Blackman, Blackman-Harris, Flat top, Tukey (10 %) and Kaiser-Bessel
+(β = 6), all periodic (DFT-even). *Rectangular is the right choice for every excitation here*:
+the periodic types are leakage-free once the dwell blocks have converged, and burst random decays
+inside the block. The other windows are for responses that are not periodic in the block. The log
+notes when a non-rectangular window is used.
+
+** FRF estimators (X = reference, Y = response)
+#+begin_example
+H1 = Gxy / Gxx                      (noise on the response)
+H2 = Gyy / conj(Gxy)                (noise on the reference)
+Hv = Gxy / (Gxx - lmin)             (total least squares; lmin = smallest eigenvalue of
+                                     [Gxx  conj(Gxy); Gxy  Gyy]; Hv lies between H1 and H2)
+coherence = |Gxy|^2 / (Gxx * Gyy)
+with Gxx = <|X|^2>, Gyy = <|Y|^2>, Gxy = <conj(X) * Y>, averaged over the realizations.
+#+end_example
+
+* Stepped-sine suite
+Choose *Suite → Stepped sine* on the Output Setup tab. The Measurement tab shows the chosen suite
+as a badge and only the options, tabs and plots that apply to it; to switch suites, go back to
+Output Setup. The shaker is
+then driven with one sine at a time, stepping through the frequency plan. All the channel,
+trigger, saving and viewer features work as in the random suite.
+
+** Frequency plan
+- *Frequencies* from start to stop, with a *linear step* (Hz) or *logarithmic* spacing (points
+  per decade).
+- Every frequency is snapped to an FFT line k·fs/N, so each block holds whole cycles. Blocks then
+  join seamlessly, and the single-line DFT of a block has no leakage. Points closer together than
+  Δf = fs/N are merged (the panel says how many); use a larger block for finer steps.
+- *Settle after change*: blocks discarded after every change of frequency or drive level.
+- *Dwell per frequency*: steady-state time analysed at each frequency (rounded up to whole blocks).
+
+** Control
+- *No control*: the same sine amplitude (V peak) at every frequency.
+- *Secant control (closed loop)*: the chosen *control channel* is driven to the *target* (in that
+  channel's units) within ± *tolerance*. The target is given either as
+  - *RMS*: the block RMS, or
+  - *Amplitude (RMS·√2)*: the equivalent single-harmonic amplitude, i.e. the peak of a pure sine
+    with the same RMS. The controlled quantity is then block RMS × √2.
+  - One drive amplitude per iteration. An iteration is /settle/ blocks plus one measured block.
+    Because the output is queued /AO queue depth/ blocks ahead, the measured block is read that
+    many blocks later; the drive is held meanwhile. A small queue (2) makes control faster.
+  - Update rule (secant on f(A) = y(A) − target, using the last two valid points; the first
+    step uses the origin, i.e. a proportional step):
+    #+begin_example
+    A_next = A_k − (y_k − y_target) · (A_k − A_(k−1)) / (y_k − y_(k−1))
+    limited to  ½·A_k ≤ A_next ≤ 2·A_k   and   A_next ≤ drive limit
+    #+end_example
+    If the response did not grow with the drive (non-monotonic or noise), a proportional step is
+    used instead.
+  - The first frequency starts at the *initial drive*; every later frequency starts from the
+    previous frequency's final drive.
+  - *At least one refinement per frequency.* The first iteration at a frequency uses the
+    carried-over drive and never counts as converged, even if it is already within tolerance:
+    the drive is always corrected at least once from a measurement at this frequency (noted as
+    /within tolerance: one refinement step/ in the iteration log). /Max iterations/ is therefore
+    at least 2. A frequency can still end after one iteration when control fails outright, e.g.
+    the drive limit is reached below the target.
+  - The control must converge before the dwell starts. The test only moves to the next frequency
+    after the dwell.
+
+** Detected problems and what happens
+| Condition                     | Detection                                                                          |
+|-------------------------------+------------------------------------------------------------------------------------|
+| Input overload / saturation   | any channel's abs(peak) ≥ /overload %/ of its range; that block is not used for control |
+| Target unreachable (overload) | the next secant step needs a drive at which a channel already overloaded            |
+| Drive limit                   | drive at the limit and the target is still not reached                              |
+| Max iterations                | not within tolerance after /max iterations/                                         |
+
+*If control fails*, the setup decides:
+- *Ask me*: the drive is held at a safe level (the best non-overloaded iteration) and a dialog
+  offers /Retry/ (another set of iterations), /Accept best and continue/ (flagged), /Skip this
+  frequency/, or /Stop the test/.
+- *Accept best and continue (flagged)*, *Skip this frequency*, *Stop the test*: done automatically.
+
+** Controller display (Measurement tab → Controller)
+- Live status: step, frequency, phase, drive, control-channel RMS against target, error.
+- *Current frequency* plot: control-channel RMS per iteration against the target ± tolerance band
+  (green), drive per iteration (right axis), overloaded iterations marked ✕.
+- *Sweep overview*: final drive against frequency (i.e. the inverse of the transfer from drive to
+  control channel), final error %, flagged (○) and skipped or failed (✕) frequencies.
+- *Table*: every frequency with status (colour-coded with semi-transparent tints that read well
+  in light and dark themes), iterations, drive, achieved value, error, THD of the control and
+  reference channels, the lowest fundamental fraction η, overloads and failure reason.
+- FRFs (one point per frequency) and the fundamental fraction update after every frequency.
+- *Harmonics* tab: the harmonic decomposition of the current block (see below).
+
+** Fundamental fraction instead of coherence
+Ordinary coherence is not useful in a stepped-sine test. Computed at the excitation line across
+the dwell blocks, it only measures block-to-block repeatability: it is ≈ 1 for any steady sine,
+exactly 1 with a single dwell block, and blind to distortion, because harmonics fall on other
+lines. The stepped-sine suite therefore reports the *fundamental fraction*
+#+begin_example
+eta_channel = (power at the excitation line) / (total AC power of the block)   averaged over dwell blocks
+eta_FRF     = eta_reference * eta_response
+#+end_example
+η = 1 for a clean, linear, steady response; it drops with noise, harmonic distortion and leftover
+transients. It takes the place of coherence in the plots and is saved as
+=<base>_FundamentalFraction.uff= (UFF 58, general real function). The random suite still uses
+ordinary coherence.
+
+** Harmonic decomposition
+Each stepped-sine block holds whole cycles of f0, so it is an exact Fourier series in f0:
+x(t) = a0 + Σ A_h cos(2π·h·f0·t + φ_h), with harmonic h on FFT line h·k (no window, no leakage).
+- *Measurement → Harmonics* (live) and *Data Viewer → Frequency steps → Show: Harmonics* (any
+  saved dwell block).
+- Bar chart of the harmonic levels in dB relative to the fundamental for channels A and B, up to
+  the chosen order (limited by Nyquist).
+- One excitation cycle of channel A: measured samples, the Fourier series, the fundamental and the
+  sum of harmonics 2…H.
+- Text: fundamental amplitude and phase, THD, DC, the non-harmonic residual (noise and anything not
+  at a harmonic) and the first harmonic levels.
+- This per-block view is the *Block harmonics* tab on the Measurement tab; in the Data Viewer it is
+  /Frequency steps → Show: Harmonics/.
+
+In the Data Viewer the *Harmonics* page is built from the run's time data (dwell blocks, else the
+converged block per frequency). Without time data it uses the saved =<base>_harmonics.csv=
+(complex re/im; older files without those columns are rebuilt from amplitude ∠ phase), so the
+harmonics can be viewed whenever either was saved; the page names its source. The same file feeds
+/Frequency domain → Amplitude spectrum/ for such runs.
+
+*Nyquist limits the measurable orders.* Harmonic h of f₀ can only be measured if h·f₀ < fs/2. At
+fs = 5120 Hz (Nyquist 2560 Hz) and f₀ = 536 Hz that is h ≤ 4, whatever number is set. Output Setup
+warns before the run (and the log repeats it), giving the highest measurable order and the
+sampling rate that would allow all of them (e.g. 10 orders at 536 Hz need fs > 10.7 kHz: use 12.8
+kHz on the NI 9234). The harmonics pages always list orders 1…n as set; orders that were above
+Nyquist at every frequency of a run are greyed out and marked /above Nyquist, not measured/.
+
+The Block harmonics readout lists every order up to the set number; orders above Nyquist at the
+current frequency are omitted, and the readout says so.
+
+** Strobed view (stepped sine)
+Measurement tab → *Strobed view* (right): the latest block(s) of the current frequency folded onto
+one period 0 … T = 1/f, as a point cloud with the fitted Fourier series (DC + harmonics 1…n) and
+the residual in % of the AC RMS. Only blocks with the same drive are overlaid, so a settling
+block right after a frequency change shows its transient as scatter around the fit. In the Data
+Viewer: /Frequency steps/ page → /Show: Strobed view/ folds all dwell blocks of the chosen step.
+The harmonic suite has the same view (see below).
+
+** Harmonics against frequency (stepped sine only)
+A separate page, *Harmonics vs frequency* (next to the FRF on the Measurement tab, and the
+*Harmonics* sub-tab in the Data Viewer), shows how the harmonics evolve over the sweep:
+- Tick *any number of channels* and *any set of harmonic orders* (1 = fundamental). The
+  /Fundamental/, /Odd/ (3, 5, 7, …) and /Even/ (2, 4, 6, …) buttons tick or untick a whole group;
+  a button shows pressed while every order of its group is ticked.
+- /Show/: *Amplitude* |X_h| (channel units, optional log axis), *Level re own fundamental* (dBc),
+  or *Harmonic FRF* |Y_h| / |X_1,ref| (harmonic h of each channel over the reference fundamental).
+- Phase plot: phase of each harmonic relative to the excitation, φ_h − h·φ_ref,1, which does not
+  depend on where the block starts.
+- Colour identifies the channel; line style and marker identify the harmonic order. Orders with
+  h·f0 ≥ fs/2 are omitted. The page exports as an image.
+The FRF plots themselves always show the ordinary (fundamental) FRF.
+In the Data Viewer the harmonics are recomputed from the run's time data: the dwell-block file if
+it exists, otherwise the converged-block file (the page says which). A run saved without either
+TDMS file has no time data to decompose; the page then says so instead of staying empty, and any
+other problem is shown there as an error message.
+
+** Saving harmonics
+The number of harmonics is set *once*, on Output Setup → Stepped sine → /Harmonics: orders 1 … n/
+(2–20, default 5). It applies to the Block harmonics display, the Harmonics vs frequency page and
+the saved files; the Data Viewer uses the value stored with each run.
+
+With /Harmonics → CSV (complex) + UFF/ (Measurement tab, stepped sine) a run also writes:
+- =<base>_harmonics.csv=: every channel, every frequency, orders 1…n, as the *complex* peak
+  amplitude X_h = =re= + j·=im= (so that x(t) contains Re{X_h·e^(j2π·h·f0·t)}), plus the
+  magnitude, phase (°) and level relative to the channel's own fundamental (dBc).
+- =<base>_Harmonic<h>.uff= for h = 2…n: the complex Y_h/X_1 of every response (UFF 58).
+
+** Stepped-sine output files
+| File                              | Contents                                                                          |
+|-----------------------------------+-----------------------------------------------------------------------------------|
+| =<base>_H1/H2/Hv.uff=             | UFF 58 at the measured frequencies (uneven spacing is written as such)          |
+| =<base>_FundamentalFraction.uff=  | η_FRF per response at the measured frequencies (UFF 58, general real function)  |
+| =<base>_stepped_converged_blocks.tdms= | /Converged block of every frequency/: one group =Step_NNN= per frequency holding the time waveform of the block the controller accepted (every channel + =Drive=, + =Trigger=), with properties for frequency, FFT line, status, iteration, drive, target, achieved level, error and the block's first sample index/time |
+| =<base>_stepped_sine.tdms=        | /Dwell blocks of every frequency/: one group =Step_NNN= per frequency: all dwell blocks, drive (+ trigger), with properties for frequency, status, iterations, drive, error, THD |
+| =<base>_control_summary.csv=      | one row per frequency (as in the Controller table, incl. target type and min. η) |
+| =<base>_control_iterations.csv=   | every control iteration: frequency, drive, measured RMS, error, overload, note    |
+| =<base>_harmonics.csv=            | optional: complex harmonics 1…n (re, im) of every channel at every frequency, plus amplitude, phase, dBc |
+| =<base>_Harmonic<h>.uff=          | optional: Y_h/X_1 of every response for h = 2…n                                   |
+
+The two TDMS files are independent check boxes in the Measurement tab (row /Time data → TDMS/):
+- /Converged block of every frequency/ — the "converged block" is the last control iteration's
+  block that met the tolerance. If you accept the best iteration after a failure, that iteration's
+  block is saved (status =accepted=); with /No control/ it is the first dwell block.
+- /Dwell blocks of every frequency/ — the full dwell record per step.
+
+Frequencies in all files are computed from the *actual* sample rate read back from DAQmx, so they
+are correct when a delta-sigma module coerces the rate.
+
+FRFs come from the dwell blocks: single-line spectra of every channel, then H1/H2/Hv across the
+dwell blocks, plus the fundamental fraction η. In the
+Data Viewer a stepped run lists its *frequency steps* instead of realizations, and *Channels &
+re-processing* can re-reference, relabel and re-save it like a random run.
+
+* Harmonic suite
+Choose *Suite → Harmonic* on the Output Setup tab. The drive is periodic in one base frequency:
+#+begin_example
+v(t) = Σ_i a_i · cos(n_i·Ω·t + φ_i),     Ω = 2π·f0
+#+end_example
+** Setup (Output Setup → Harmonic excitation)
+- *Base frequency f0*. It is moved to the nearest FFT line k·fs/N (shown below the field), so every
+  block holds k whole periods: blocks join seamlessly and each harmonic is read leakage-free from
+  line n_i·k. Every listed order must be below Nyquist.
+- *Harmonics table*: order n (whole number ≥ 1, each once), amplitude a (peak), phase φ (°).
+  Add/remove rows with the buttons.
+- *Control*:
+  - /No control/: the table is the drive in volts, exactly v(t) above. The drive's peak must be
+    within the drive limit.
+  - /Quasi-Newton control (Broyden)/: the table is the *target* for the harmonics of the *control
+    channel* (amplitude in its units). An amplitude of 0 means /suppress this harmonic/ (e.g. to
+    cancel shaker distortion at 2Ω, 3Ω).
+- *Initial drive*: the largest harmonic's drive at the first iteration; the others are scaled to
+  their targets, but at least 5 %, so every harmonic is probed. *Tolerance*, *Max iterations*
+  (≥ 2), *If control fails*, *Input overload at* and *Settle after change* work as in the
+  stepped-sine suite.
+- *Converged test*: how many converged blocks are run before the excitation is switched off
+  (the duration is shown next to it).
+- *Harmonics shown: 1 … n*: orders used by the displays (Block harmonics, strobed-view Fourier fit);
+  at least the highest order in the table. This is the suite's only harmonic-count setting.
+
+** Control (Broyden's quasi-Newton method)
+The unknowns are the complex drive harmonics V_i, as the real vector x = [Re V; Im V]. The
+residual is r(x) = [Re(Y − T); Im(Y − T)], with Y the measured harmonics of the control channel and
+T the targets. One iteration is /settle/ blocks plus one measured block at a fixed drive.
+#+begin_example
+first Jacobian   B0 = diagonal: each harmonic's own gain Y_i / V_i (no cross-coupling yet)
+step             x+ = x − B⁻¹ · r
+update           B ← B + (Δr − B·Δx)·Δxᵀ / (Δxᵀ·Δx)          (Broyden's "good" update)
+#+end_example
+The Broyden updates learn the cross-coupling between harmonics, e.g. a nonlinear shaker or structure
+that turns drive at Ω into response at 2Ω. Safeguards:
+- a harmonic's drive may at most double per step (small ones: relative to the largest);
+- the drive waveform's peak stays within the drive limit (the step is shortened to reach it
+  exactly; already at the limit and still short of the target ⇒ /drive limit/ failure);
+- if the error grows by more than 1.5×, the step is halved back towards the previous drive.
+
+*Error* of harmonic i: e_i = |Y_i − T_i| / s_i, with s_i = |T_i|, or the largest |T| for targets
+below 10 % of the largest (e.g. suppressed harmonics). It is a complex error: 3 % ≈ 3 % in
+amplitude and 1.7° in phase. *Converged* when every e_i ≤ tolerance, and never on the first
+iteration (at least one refinement).
+
+*Failures* (as in stepped sine): input overload before the target is reached (above it the
+drive is halved), drive limit, input saturation (the target needs more drive than overloads an
+input), and max iterations. Actions: /Ask me/ (drive held at a safe level; Retry / Accept best
+and run the test / Stop), /Accept the best iteration and run the test (flagged)/, or /Stop/.
+
+** Measurement tab (harmonic suite)
+Only what applies is shown; there is no FRF.
+- *Live data*: the latest block and the recent-blocks strip (green = converged test block).
+- *Controller (harmonic)*: f0, phase, iteration, max error, drive peak; a table per harmonic with
+  target, response (amplitude ∠ phase), error (green within tolerance) and drive; and the max
+  error on a log scale over the control iterations (blue) and the test blocks (orange), with the
+  tolerance as a dashed line.
+- *Block harmonics*: bar chart and one-cycle Fourier series of the latest block.
+- *Strobed view* (also in the stepped-sine suite): the samples of the latest block(s), folded
+  onto one period, 0 … T = 2π/Ω, as a point cloud overlaid with the fitted Fourier series
+  (DC + harmonics 1…n). /Overlay last N blocks/ adds earlier blocks with the same drive (they all
+  start at phase 0). The residual of the fit, as a % of the AC RMS, shows how much is not periodic
+  in Ω (noise, transients, sub-harmonics). Channels A and B get one plot each.
+
+** Saved files (time data only)
+Measurement tab → /Time data → TDMS/, with:
+- /All blocks/: everything from the start (IEPE settling, fade-in, every control iteration incl.
+  settle and hold blocks, the test, fade-out);
+- /Converged (test) blocks only/;
+- /One converged block every S seconds/: a sparse record of a long test.
+
+| File                              | Contents                                                                                  |
+|-----------------------------------+-------------------------------------------------------------------------------------------|
+| =<base>_harmonic.tdms=            | one group =Block_NNNNNN= per saved block (number = block index in the acquisition): every channel + =Drive= (+ =Trigger=); properties: kind (settle, measure, hold, test, …), iteration, test block, status, first sample index/time, f0, drive harmonics (amplitude, phase), and with control the response harmonics and errors of the control channel. Root properties: f0, orders, targets/drive, control settings |
+| =<base>_control_iterations.csv=   | control log: every iteration's drive, response and error per harmonic                      |
+| =setup.json=, =<base>_trigger_log.csv= | as in the other suites                                                               |
+
+** Data Viewer (harmonic runs)
+Harmonic runs are detected automatically ([harmonic] tag, green badge). They have no FRFs, so they
+open on their own page, *Blocks — time & strobed view*: pick a saved block (iteration/test number
+and error are listed), see its time history, the drive and control properties, a table of every
+channel's harmonics (amplitude ∠ phase, DC), and the strobed view with the preceding saved blocks
+of the same drive overlaid. They are not offered in /Compare runs/.
+
+* Phase-quadrature suite (amplitude-dependent resonance)
+Choose *Suite → Phase Quadrature* on the Output Setup tab. For each drive level (a sine of fixed
+voltage) the frequency is adjusted until the response is at resonance, then the converged block is
+recorded and the next level starts from that frequency. Plotting the resonance frequency against
+the response (or force) amplitude gives the *backbone curve* of a nonlinear mode.
+
+** Setup (Output Setup → Phase quadrature)
+- *Drive levels*: min … max (V peak), as a /number of levels/ or a /step/; order /ascending/,
+  /descending/ or /up, then down/ (shows hysteresis or jumps).
+- *Initial frequency*: first guess of the resonance; later levels start from the previous level's
+  resonance. *Search range*: control fails if the resonance would lie outside it.
+- *Control*:
+  - /Phase quadrature (secant on frequency)/: the phase of the response's fundamental relative to
+    the reference's is driven to the *quadrature phase* (presets: acceleration/force +90°,
+    velocity/force 0°, displacement/force −90°, or custom) within ± *phase tolerance*.
+  - /Reference-free/: the frequency of maximum |H1| = |response / reference| is located to
+    ± *frequency tolerance* (bracketing search with parabolic refinement). Without a reference
+    channel, |response| per drive volt is maximised. For a damped mode the |H1| peak is not
+    exactly at phase quadrature (the difference is of the order of the damping).
+- *Response channel*; the *reference channel* is shown as set on Channel Setup (needed for
+  quadrature).
+- *First step*, *Max step* (Hz per iteration), *Max iterations*, *If control fails* (ask / accept
+  best and continue / skip this level / stop), *Input overload at*, *Settle after change*
+  (blocks discarded after every frequency or level change), *Converged blocks* (recorded at the
+  converged frequency: averaged for the result and saved), *Harmonics: orders 1 … n*.
+
+** How it works
+- *Any frequency.* The drive is a phase-continuous sine at the exact frequency (not limited to
+  FFT lines), and every block is analysed by a least-squares fit of DC + harmonics at that
+  frequency against absolute time. This is unbiased with a non-integer number of periods per block,
+  so the frequency resolution is not Δf = fs/N.
+- *Quadrature secant*: e(f) = wrap(φ(f) − φ_target);
+  f⁺ = f − e·(f − f_prev)/(e − e_prev) when the phase falls with frequency (as it does through a
+  resonance); otherwise a fixed step towards quadrature (phase above target ⇒ raise f), scaled
+  with |e|/45°. Steps are limited to ± max step and to the search range.
+- The first iteration of a level never counts as converged (at least one refinement).
+- Failures: input overload, search range exhausted, max iterations.
+
+** Measurement tab (phase quadrature)
+No FRF. Left: *Live data*, *Block harmonics* (least squares at the exact frequency), *Controller
+(phase quadrature)*: level, drive, frequency, phase, error, the iterations of the current level
+(frequency and phase error, tolerance band) and a table of all levels. Right: *Strobed view*
+(blocks of the same frequency and level, folded with their absolute time) and *Resonance vs
+amplitude*: the backbone (response amplitude, reference amplitude, drive level, |H1| or response
+per volt, against the resonance frequency; blue = increasing level, red = decreasing), and |H1| and
+its phase at resonance.
+
+** Saved files
+| File                                     | Contents                                                                 |
+|------------------------------------------+--------------------------------------------------------------------------|
+| =<base>_phase_quadrature.csv=            | one row per level: drive, status, iterations, resonance frequency, phase (response re reference) and its error, reference and response fundamentals (amplitude, re, im), *H1 = response/reference* (re, im, amplitude, phase), *ratio of response to reference* abs(Y1)/abs(X1), response per drive volt, THD, overload, reason |
+| =<base>_pq_harmonics.csv=                | complex harmonics 1…n (re, im, amplitude, phase, dBc) of every channel at every level |
+| =<base>_control_iterations.csv=          | every iteration: level, drive, frequency, phase, phase error, objective, note |
+| =<base>_phase_quadrature_blocks.tdms=    | option: the converged block(s) of every level (group =Level_NNN=, every channel + Drive), with the level's results as properties |
+| =<base>_H1.uff=                          | option: H1 at the resonance of every level against frequency (UFF 58, uneven abscissa) |
+
+** Data Viewer
+Phase-quadrature runs are detected automatically ([quadrature] tag, orange badge) and open on
+*Resonance vs amplitude*: the backbone and H1 plots, the level table and a level inspector (time
+history, strobed view and harmonics of every channel of the converged block). In *Compare runs*
+their H1 at resonance (squares, dashed, in level order) overlays the FRFs of stepped-sine and
+random runs, so frequency vs |H1| can be compared directly; /Amplitude spectrum/ overlays the
+harmonics at every level's resonance.
+
+The simulator gives mode 1 a softening stiffness in this suite, so the resonance moves with the
+drive level (about −4 % from 0.05 V to 0.8 V).
+
+* External trigger (high-speed camera)
+The trigger works in all suites. Its mode labels follow the selected suite:
+
+| Random suite                                     | Stepped-sine suite                                    | Harmonic suite                     |
+|--------------------------------------------------+-------------------------------------------------------+------------------------------------|
+| Once, when the input task starts                 | Once, at the start of the acquisition                 | Once, when the input task starts   |
+| Start of the converged block of each realization | At the start of the converged (dwell) block at every frequency | Start of the converged test blocks |
+| Start of the dwell blocks of each realization    | At the start of every frequency step                  | Start of every control iteration   |
+| Frame sync                                       | Frame sync                                            | Frame sync                         |
+
+Phase quadrature: once at the start; at the start of the converged block of every level; at the
+start of every drive level; or frame sync.
+
+Enable *External trigger* on the Output Setup tab to send a pulse to a camera or any other device.
+The pulse goes out on either:
+
+- *another AO channel* (.../aoN). It is added to the same AO task as the shaker drive, so it is
+  sample-exact with the drive. Set the active level: 3.3 V is enough for TTL inputs (≥ 2 V reads
+  as high). Both AO channels get one common output range, so they must fit the module: ±4.24 V on
+  an NI 9260, ±10 V on an NI 9263. The app checks this before starting. On delta-sigma AO modules
+  (NI 9260 family), the reconstruction filter delays the pulse and rounds its edges, so use pulses
+  of 10 samples or more, or a DO line for clean edges.
+- *a DO line* (.../portN/lineM). This needs a hardware-timed (correlated) DIO module such as the
+  NI 9401. It runs as its own continuous task on the same clock and start trigger.
+
+The trigger line is written block by block alongside the drive, on the same sample clock, so every
+pulse starts on an exact, known sample index:
+
+| Mode                                             | Pulse at                                                    |
+|--------------------------------------------------+-------------------------------------------------------------|
+| Once, when the input task starts                 | sample 0 (the start of the acquisition)                     |
+| Start of the converged block of each realization | first sample of the last dwell block                        |
+| Start of the dwell blocks of each realization    | first sample of the first dwell block                       |
+| *Frame sync*                                     | *one pulse per sample*, from sample 0 to the end of the run |
+
+You can also set the pulse width (in samples, with the equivalent µs shown) and the polarity:
+active-high for a rising-edge trigger, active-low for a falling-edge one. The idle level is set
+before the run, so a falling edge at sample 0 also works.
+
+** Frame sync (4th mode)
+Frame sync does not generate a waveform. It routes the input task's own *sample clock* to a PFI
+terminal on a hardware-timed DIO module, e.g. =/cDAQ1Mod4/PFI0= on an NI 9401. The pin gives one
+pulse for every acquired sample, starting with sample 0, for as long as the run lasts. Connect it
+to the camera's *external sync / frame clock* input instead of its trigger input. Every frame is
+then exposed on a DAQ sample clock edge: *camera frame f = AI sample f*, with no drift and no
+need to match the camera's fps by hand.
+
+- Choose the *polarity* that matches the camera's sync input. The pulse width is fixed by the
+  hardware, so check it against the camera's minimum sync pulse width on a scope.
+- The NI 9401 sets direction per group of 4 lines. Lines used as output (DO or PFI out) must be in
+  an output group. Its outputs are 5 V TTL.
+- The camera records frames for the whole run, including the IEPE decay time. Allow for that in its
+  memory, or start camera recording with its own trigger input.
+- The delta-sigma filter-delay caveat below still applies (frame f = AI sample f + filter delay).
+- The pulses come out continuously, so =trigger_log.csv= is not written. The TDMS root properties
+  record =frame_sync_terminal=.
+
+What gets recorded (single-pulse modes):
+
+- *=<base>_trigger_log.csv=* holds the pulse number, the *absolute sample index* (0 = AI start),
+  the time, the block, the realization and the dwell block. If the camera fps equals the sampling
+  rate, frame /f/ after pulse /p/ corresponds to sensor sample =sample_index[p] + f=.
+- The TDMS groups contain a *=Trigger=* channel, and their =first_sample_index= and
+  =first_sample_time_s= properties place every saved block on the same absolute sample axis.
+
+Alignment caveats:
+
+- *The camera clock is independent* in the single-pulse modes. A start pulse fixes frame 0, but
+  the camera's own clock and the DAQ clock drift slightly apart, by tens of ppm. Use *Frame sync*
+  to remove the drift completely.
+- *Delta-sigma filter delay.* On delta-sigma input modules (NI 9234 etc.) each AI sample is
+  delayed by the module's filter group delay (about 38 samples plus a few µs on the 9234; see its
+  manual). The pulse leaves the output with almost no delay. So camera frame /f/ lines up with AI
+  sample /f + delay/. If you need sub-sample certainty, also wire the trigger line into a spare AI
+  channel: then the pulse is recorded with the same delay as the sensors.
+
+* Output files
+Each run creates =<folder>/<basename>_<YYYYmmdd_HHMMSS>/= (with a =_2=, =_3=, … suffix if two runs
+start within the same second, so runs never mix files) containing:
+
+| File                                  | Contents                                                                                                |
+|---------------------------------------+---------------------------------------------------------------------------------------------------------|
+| =setup.json=                          | the exact setup used                                                                                    |
+| =<base>_H1.uff=, =_H2.uff=, =_Hv.uff= | UFF dataset 58 (function type 4, complex), one per response channel, always the full range Δf...fs/2    |
+| =<base>_Coherence.uff=                | UFF dataset 58 (function type 6, real)                                                                  |
+| =<base>_converged_blocks.tdms=        | one group per realization: the converged block of every channel plus the =Drive= (and =Trigger=) signal |
+| =<base>_realization_NNN.tdms=         | optional: the full time history (all dwell blocks) of each realization                                  |
+| =<base>_trigger_log.csv=              | when the external trigger is enabled: sample index and time of every pulse                              |
+
+The UFF records carry the response and reference node and direction (±X/Y/Z → ±1/2/3), the channel
+names and the units. The TDMS channels carry =wf_increment=, =unit_string=, node, direction,
+sensitivity and the physical channel name, so they open in DIAdem, LabVIEW, or =nptdms= in Python.
+The random seed is logged and stored, so you can repeat a run exactly by entering the same seed.
+
+* Checking the sample rate with the hardware
+Delta-sigma modules (NI 9234, 9235, 9260, …) support only discrete rates, and modules sharing a
+task must share one master timebase, so DAQmx may use a different rate than the one entered. All
+input channels are in one task: every channel is sampled at the same rate and instant, and the app
+always analyses with the rate DAQmx actually uses (it is logged at the start of a run).
+
+Output Setup → /Sampling rate/ → *Check with hardware* asks DAQmx, without starting anything, which
+input and output rate it would really use for the enabled channels and the drive channel. It then
+shows:
+- the actual input rate (marked when coerced, with a link to use it) and whether the output rate
+  matches it exactly,
+- the error, if DAQmx refuses the rate (e.g. 51.2 kHz with an NI 9235, which allows ≤ 10.24 kHz
+  on the 9234's timebase),
+- up to 12 nearby rates that every module accepts *exactly* — click one to use it.
+Choosing such a rate makes the Output Setup previews (Δf, frequency plans, Nyquist warnings) match
+the run exactly. In simulation mode the check only notes that the simulator uses the rate as entered.
+
+* Hardware notes (cDAQ-9174)
+- *Sample rates.* Delta-sigma input modules (NI 9234/9232/9250) only support discrete rates such
+  as 51.2 kHz / n, and DAQmx coerces the rate you request. The app reads back the actual rate and
+  uses it for the AO. If the AO module cannot produce exactly the same rate, the log shows a
+  *warning*, because the excitation would then no longer be periodic in the block. Pick a rate
+  both modules hit exactly (e.g. 25.6 kHz, 12.8 kHz, 6.4 kHz with a 9234 + 9263), or try
+  /Synchronisation → AO clocked by AI sample clock/.
+- *IEPE current.* The NI 9234 and 9250 supply 2 mA only. The 9232 supports 2 or 4 mA. Use AC
+  coupling for IEPE sensors.
+- *Filter delay.* The input module's filter delay does not affect the FRFs, because force and
+  response are both measured on AI channels, which share the same delay.
+- *Mixed delta-sigma modules.* Delta-sigma modules from different families (e.g. 9234 at
+  51.2 kHz/n and 9237 at 50 kHz/n) cannot share one AI task. Put them in compatible combinations.
+- *AO queue depth.* Over USB, keep blocks at about 50 ms or longer. If you see AO underflow
+  errors on a busy PC, increase /AO queue depth/. This adds latency only, not gaps.
+
+* Notes for Ubuntu (Wayland)
+On GNOME/Wayland, Qt may print =qt.qpa.wayland.textinput: … Trying to disable … but 0x0 is focused=
+when focus moves between widgets or dialogs. It is harmless (Qt's input-method layer, not the
+app) and the app now mutes that one logging category at start-up. To see it again, start with
+=QT_LOGGING_RULES="qt.qpa.wayland.textinput=true" python -m pymodalshaker=. To run under X11
+(XWayland) instead: =QT_QPA_PLATFORM=xcb python -m pymodalshaker=.
+
+* Project layout
+#+begin_example
+pyproject.toml     packaging (pip install .), entry point 'pymodalshaker'
+LICENSE            GNU GPL v3
+docs/              user manual (org + PDF + screenshots)
+pymodalshaker/
+  config.py        setup dataclasses, validation, JSON
+  excitation.py    uniform random & multisine generators
+  frf.py           spectral averaging, H1/H2/Hv, coherence
+  backends.py      NI-DAQmx continuous AI/AO backend + simulator
+  engine.py        random suite: block scheduler / measurement loop (Qt-free, testable)
+  stepped.py       stepped-sine suite: secant controller, failure handling, single-line FRFs
+  harmonic_suite.py harmonic suite: multi-harmonic drive, Broyden controller, time-data saving
+  pq_suite.py      phase-quadrature suite: resonance tracking per drive level (secant / peak search)
+  harmonics.py     Fourier-series (harmonic) decomposition of stepped-sine blocks
+  results.py       reading saved runs back: FRFs, spectra, harmonics, re-processing (Data Viewer)
+  export.py        UFF 58 (pyuff) and TDMS (npTDMS) writers
+  gui/             PySide6 tabs, main window, shared plot widgets & image export
+#+end_example
+
+* Changelog
+** 0.1.0b1 (4 November 2026) --- first beta
+First public release: random, stepped-sine, harmonic and phase-quadrature suites; Data Viewer with
+re-processing and run comparison; external trigger and frame sync; hardware sample-rate check;
+pressure and custom sensor types; user manual.
+
+* License
+pymodalshaker is free software: you can redistribute it and/or modify it under the terms of the GNU
+General Public License as published by the Free Software Foundation, either version 3 of the
+License, or (at your option) any later version. It is distributed in the hope that it will be
+useful, but WITHOUT ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS
+FOR A PARTICULAR PURPOSE. See the =LICENSE= file for the full text.
+
+Copyright © 2026 The pymodalshaker authors.
