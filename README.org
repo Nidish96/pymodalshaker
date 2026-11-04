@@ -2,6 +2,17 @@
 #+STARTUP: overview
 #+OPTIONS: toc:2 num:nil ^:{}
 
+A desktop app for shaker-driven modal testing with a USB NI cDAQ chassis (e.g. cDAQ-9174). It uses
+continuous, synchronized analog input and analog output, and offers four excitation suites:
+- a *random suite* (periodic random, multisine, chirp, burst, custom spectra),
+- a *stepped-sine suite* with secant amplitude control (both give H1/H2/Hv FRFs, UFF 58 and TDMS),
+- a *harmonic suite*: one base frequency with a list of harmonics (amplitude and phase each),
+  fixed or controlled on a response channel by a quasi-Newton (Broyden) controller; it records
+  time data only,
+- a *phase-quadrature suite*: amplitude-dependent resonance. For every drive level the frequency
+  is iterated to phase quadrature (or to maximum |H1|, reference-free), giving backbone curves.
+
+* Disclaimer
 *Disclaimer*: This was vibe coded using Claude Opus 5.5 over Nov 2-Nov 4 2026. It comes with no
 guarantees of correctness.
 - *How it was made*: the code, the README and the user manual (=docs/=) were written by the AI from
@@ -16,18 +27,7 @@ guarantees of correctness.
   amplifier gain the first time each suite drives real hardware.
 - Version 0.1.0b1 (first beta), shown in the window title and saved in every run's =setup.json=. NI,
   CompactDAQ, NI-DAQmx, LabVIEW and DIAdem are trademarks of National Instruments (NI); this tool is
-  not affiliated with or endorsed by NI.
-
-A desktop app for shaker-driven modal testing with a USB NI cDAQ chassis (e.g. cDAQ-9174). It uses
-continuous, synchronized analog input and analog output, and offers four excitation suites:
-- a *random suite* (periodic random, multisine, chirp, burst, custom spectra),
-- a *stepped-sine suite* with secant amplitude control (both give H1/H2/Hv FRFs, UFF 58 and TDMS),
-- a *harmonic suite*: one base frequency with a list of harmonics (amplitude and phase each),
-  fixed or controlled on a response channel by a quasi-Newton (Broyden) controller; it records
-  time data only,
-- a *phase-quadrature suite*: amplitude-dependent resonance. For every drive level the frequency
-  is iterated to phase quadrature (or to maximum |H1|, reference-free), giving backbone curves.
-
+  not affiliated with or endorsed by NI.  
 * Install & run
 Requires Python ≥ 3.10. For hardware you also need the *NI-DAQmx driver* from ni.com (without it,
 the app runs in simulation mode).
