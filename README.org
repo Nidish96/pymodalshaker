@@ -612,6 +612,10 @@ names and the units. The TDMS channels carry =wf_increment=, =unit_string=, node
 sensitivity and the physical channel name, so they open in DIAdem, LabVIEW, or =nptdms= in Python.
 The random seed is logged and stored, so you can repeat a run exactly by entering the same seed.
 
+*Modal analysis post-processing*: the FRFs from a random run (the =<base>_H1/H2/Hv.uff= files) can be
+loaded into [[https://github.com/Nidish96/SDynPy-WorkBench/tree/main][SDynPy-WorkBench]] for modal
+analysis post-processing.
+
 * Checking the sample rate with the hardware
 Delta-sigma modules (NI 9234, 9235, 9260, …) support only discrete rates, and modules sharing a
 task must share one master timebase, so DAQmx may use a different rate than the one entered. All
